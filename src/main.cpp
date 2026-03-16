@@ -61,7 +61,7 @@ volatile bool update_graph_display = false; // Triggers UI redraw
 // --- STATE MACHINES ---
 enum PhaseType { DETECTING, OFFLINE, SINGLE_PHASE, THREE_PHASE };
 volatile PhaseType currentPhase = DETECTING;
-const float CURRENT_NOISE_FLOOR = 0.15; 
+const float CURRENT_NOISE_FLOOR = 0.7; 
 
 enum TabState { HOME_TAB, GRAPH_TAB, NUMBER_TAB };
 TabState currentTab = HOME_TAB;
@@ -493,30 +493,56 @@ void drawGraphContent() {
     tft.setTextSize(1);
 
     if (currentGraphMode == GRAPH_ELEC) {
-        // --- ELECTRICAL GRAPH (0A to 15A scale) ---
-        // Draw Middle Grid Line (7.5A)
-        int mid_y = mapFloatToY(7.5, 0, 15, y_bottom, y_top);
+        // --- ELECTRICAL CENTERED SINE WAVE GRAPH ---
+        
+        // 1. Draw Middle Grid Line
+        int mid_y = y_top + (y_bottom - y_top) / 2;
         tft.drawLine(x_start, mid_y, x_start + GRAPH_WIDTH, mid_y, TFT_DARKGREY);
         
-        // Draw Scale & Legend
+        // 2. Draw Scale & Legend
         tft.setTextColor(TFT_LIGHTGREY);
-        tft.setCursor(x_start + 2, y_top + 4); tft.print("15A");
-        tft.setCursor(x_start + 2, mid_y - 10); tft.print("7.5A");
+        tft.setCursor(x_start + 2, y_top + 4); tft.print("+15A Peak"); 
+        tft.setCursor(x_start + 2, mid_y - 10); tft.print("0A");
+        tft.setCursor(x_start + 2, y_bottom - 12); tft.print("-15A Peak");
         
-        tft.setTextColor(TFT_RED);   tft.setCursor(x_start + 50, y_top + 4); tft.print("L1");
-        tft.setTextColor(TFT_GREEN); tft.setCursor(x_start + 80, y_top + 4); tft.print("L2");
-        tft.setTextColor(TFT_BLUE);  tft.setCursor(x_start + 110, y_top + 4); tft.print("L3");
+        tft.setTextColor(TFT_RED);   tft.setCursor(x_start + 70, y_top + 4); tft.print("L1");
+        tft.setTextColor(TFT_GREEN); tft.setCursor(x_start + 100, y_top + 4); tft.print("L2");
+        tft.setTextColor(TFT_BLUE);  tft.setCursor(x_start + 130, y_top + 4); tft.print("L3");
 
-        // Plot Lines
-        for (int i = 0; i < GRAPH_WIDTH - 1; i++) {
-            tft.drawLine(x_start + i, mapFloatToY(hist_L1[i], 0, 15, y_bottom, y_top),
-                         x_start + i + 1, mapFloatToY(hist_L1[i+1], 0, 15, y_bottom, y_top), TFT_RED);
-            tft.drawLine(x_start + i, mapFloatToY(hist_L2[i], 0, 15, y_bottom, y_top),
-                         x_start + i + 1, mapFloatToY(hist_L2[i+1], 0, 15, y_bottom, y_top), TFT_GREEN);
-            tft.drawLine(x_start + i, mapFloatToY(hist_L3[i], 0, 15, y_bottom, y_top),
-                         x_start + i + 1, mapFloatToY(hist_L3[i+1], 0, 15, y_bottom, y_top), TFT_BLUE);
+        // 3. CALCULATE THE REAL-WORLD HARDWARE DC OFFSET FOR THIS FRAME
+        long sum1 = 0, sum2 = 0, sum3 = 0;
+        for (int i = 0; i < GRAPH_WIDTH; i++) {
+            sum1 += buffer_L1[i];
+            sum2 += buffer_L2[i];
+            sum3 += buffer_L3[i];
         }
-    } 
+        int offset_L1 = sum1 / GRAPH_WIDTH;
+        int offset_L2 = sum2 / GRAPH_WIDTH;
+        int offset_L3 = sum3 / GRAPH_WIDTH;
+
+        // 4. PLOT THE CENTERED WAVES
+        for (int i = 0; i < GRAPH_WIDTH - 1; i++) {
+            // Subtract the hardware offset to mathematically force them to true 0
+            int center_y1_L1 = buffer_L1[i] - offset_L1;
+            int center_y2_L1 = buffer_L1[i+1] - offset_L1;
+            
+            int center_y1_L2 = buffer_L2[i] - offset_L2;
+            int center_y2_L2 = buffer_L2[i+1] - offset_L2;
+            
+            int center_y1_L3 = buffer_L3[i] - offset_L3;
+            int center_y2_L3 = buffer_L3[i+1] - offset_L3;
+
+            // Map the centered values (-2048 to +2048) directly to the screen's Y boundaries
+            tft.drawLine(x_start + i, map(center_y1_L1, -2048, 2048, y_bottom, y_top), 
+                         x_start + i + 1, map(center_y2_L1, -2048, 2048, y_bottom, y_top), TFT_RED);
+                         
+            tft.drawLine(x_start + i, map(center_y1_L2, -2048, 2048, y_bottom, y_top), 
+                         x_start + i + 1, map(center_y2_L2, -2048, 2048, y_bottom, y_top), TFT_GREEN);
+                         
+            tft.drawLine(x_start + i, map(center_y1_L3, -2048, 2048, y_bottom, y_top), 
+                         x_start + i + 1, map(center_y2_L3, -2048, 2048, y_bottom, y_top), TFT_BLUE);
+        }
+    }
     else if (currentGraphMode == GRAPH_MECH) {
         // --- MECHANICAL GRAPH (0 to 20 m/s2 scale) ---
         int mid_y = mapFloatToY(10, 0, 20, y_bottom, y_top);

@@ -102,8 +102,10 @@ def main():
     # 4. Define the CSV Headers
     headers = [
         "Time_ms", 
-        "L1_RMS_A", "L2_RMS_A", "L3_RMS_A", 
+        "L1_RMS_A", "L2_RMS_A", "L3_RMS_A", "Current_Unbalance_Pct",
         "VibX_RMS", "VibY_RMS", "VibZ_RMS", 
+        "VibX_Kurtosis", "VibY_Kurtosis", "VibZ_Kurtosis",
+        "VibX_Crest", "VibY_Crest", "VibZ_Crest",
         "Temp_C", "Temp_Slope", 
         "Label_Condition", "Label_Severity", "Label_Load"
     ]
@@ -143,8 +145,7 @@ def main():
                         if line:
                             sensor_data = [val.strip() for val in line.split(',')]
                             
-                            # Only save if we got exactly 9 numbers
-                            if len(sensor_data) == 9:
+                            if len(sensor_data) == 16:
                                 sensor_data.extend([condition, severity, load])
                                 writer.writerow(sensor_data)
                                 print(f"Logged: {sensor_data}")

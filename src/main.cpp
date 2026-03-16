@@ -17,7 +17,16 @@
 // --- GLOBAL CALIBRATION VARIABLES ---
 float ct_turns_ratio = 2000.0;    
 float burden_resistor_ohms = 100.0; 
-float adc_voltage_ref = 3.3;      
+float adc_voltage_ref = 3.3;
+const float CURRENT_NOISE_FLOOR = 0.7;   
+
+// --- INDEPENDENT CALIBRATION SCALARS ---
+// These factors account for MCT-10 variance and wire resistance
+float CAL_FACTOR_L1 = 20.45; // Example: Amps per Volt measured at pin
+float CAL_FACTOR_L2 = 20.12; 
+float CAL_FACTOR_L3 = 20.88;
+
+float adc_voltage_ref = 3.3; // Measured voltage at ESP32 3V3 pin
 
 // --- HARDWARE OBJECTS ---
 TFT_eSPI tft = TFT_eSPI(); 
@@ -61,7 +70,6 @@ volatile bool update_graph_display = false; // Triggers UI redraw
 // --- STATE MACHINES ---
 enum PhaseType { DETECTING, OFFLINE, SINGLE_PHASE, THREE_PHASE };
 volatile PhaseType currentPhase = DETECTING;
-const float CURRENT_NOISE_FLOOR = 0.7; 
 
 enum TabState { HOME_TAB, GRAPH_TAB, NUMBER_TAB };
 TabState currentTab = HOME_TAB;
@@ -136,7 +144,7 @@ void loop() { vTaskDelete(NULL); }
 // ==========================================
 // MATH & LOGIC
 // ==========================================
-float calculateRMS(volatile uint16_t* buffer, int length) {
+float calculateRMS(volatile uint16_t* buffer, int length, float calFactor) {
     double sum_raw = 0;
     for (int i = 0; i < length; i++) sum_raw += buffer[i];
     double dynamic_dc_offset = sum_raw / length;
@@ -148,8 +156,9 @@ float calculateRMS(volatile uint16_t* buffer, int length) {
     }
     
     float rms_adc = sqrt(sum_sq / length);
-    float rms_voltage = (rms_adc / 4095.0) * adc_voltage_ref;
-    return (rms_voltage / burden_resistor_ohms) * ct_turns_ratio;
+    // Convert ADC ticks to Volts, then apply the unique Calibration Factor
+    float rms_voltage = (rms_adc / 4095.0) * adc_voltage_ref; 
+    return rms_voltage * calFactor; 
 }
 
 float calculateRMS_Float(volatile float* buffer, int length) {
@@ -493,54 +502,55 @@ void drawGraphContent() {
     tft.setTextSize(1);
 
     if (currentGraphMode == GRAPH_ELEC) {
-        // --- ELECTRICAL CENTERED SINE WAVE GRAPH ---
+        // --- ELECTRICAL CALIBRATED SINE WAVE GRAPH ---
         
-        // 1. Draw Middle Grid Line
         int mid_y = y_top + (y_bottom - y_top) / 2;
         tft.drawLine(x_start, mid_y, x_start + GRAPH_WIDTH, mid_y, TFT_DARKGREY);
         
-        // 2. Draw Scale & Legend
         tft.setTextColor(TFT_LIGHTGREY);
-        tft.setCursor(x_start + 2, y_top + 4); tft.print("+15A Peak"); 
+        tft.setCursor(x_start + 2, y_top + 4); tft.print("+15A"); 
         tft.setCursor(x_start + 2, mid_y - 10); tft.print("0A");
-        tft.setCursor(x_start + 2, y_bottom - 12); tft.print("-15A Peak");
+        tft.setCursor(x_start + 2, y_bottom - 12); tft.print("-15A");
         
         tft.setTextColor(TFT_RED);   tft.setCursor(x_start + 70, y_top + 4); tft.print("L1");
         tft.setTextColor(TFT_GREEN); tft.setCursor(x_start + 100, y_top + 4); tft.print("L2");
         tft.setTextColor(TFT_BLUE);  tft.setCursor(x_start + 130, y_top + 4); tft.print("L3");
 
-        // 3. CALCULATE THE REAL-WORLD HARDWARE DC OFFSET FOR THIS FRAME
-        long sum1 = 0, sum2 = 0, sum3 = 0;
+        // 1. Calculate DC Offsets for this frame (Hardware bias removal)
+        long s1 = 0, s2 = 0, s3 = 0;
         for (int i = 0; i < GRAPH_WIDTH; i++) {
-            sum1 += buffer_L1[i];
-            sum2 += buffer_L2[i];
-            sum3 += buffer_L3[i];
+            s1 += buffer_L1[i]; s2 += buffer_L2[i]; s3 += buffer_L3[i];
         }
-        int offset_L1 = sum1 / GRAPH_WIDTH;
-        int offset_L2 = sum2 / GRAPH_WIDTH;
-        int offset_L3 = sum3 / GRAPH_WIDTH;
+        float off1 = (float)s1 / GRAPH_WIDTH;
+        float off2 = (float)s2 / GRAPH_WIDTH;
+        float off3 = (float)s3 / GRAPH_WIDTH;
 
-        // 4. PLOT THE CENTERED WAVES
+        // 2. Plot lines using Calibrated Amp values
         for (int i = 0; i < GRAPH_WIDTH - 1; i++) {
-            // Subtract the hardware offset to mathematically force them to true 0
-            int center_y1_L1 = buffer_L1[i] - offset_L1;
-            int center_y2_L1 = buffer_L1[i+1] - offset_L1;
-            
-            int center_y1_L2 = buffer_L2[i] - offset_L2;
-            int center_y2_L2 = buffer_L2[i+1] - offset_L2;
-            
-            int center_y1_L3 = buffer_L3[i] - offset_L3;
-            int center_y2_L3 = buffer_L3[i+1] - offset_L3;
+            // Function to convert raw ADC tick to real Amps
+            auto getAmps = [&](float raw, float offset) {
+                float voltage = ((raw - offset) / 4095.0) * adc_voltage_ref;
+                return (voltage / burden_resistor_ohms) * ct_turns_ratio;
+            };
 
-            // Map the centered values (-2048 to +2048) directly to the screen's Y boundaries
-            tft.drawLine(x_start + i, map(center_y1_L1, -2048, 2048, y_bottom, y_top), 
-                         x_start + i + 1, map(center_y2_L1, -2048, 2048, y_bottom, y_top), TFT_RED);
-                         
-            tft.drawLine(x_start + i, map(center_y1_L2, -2048, 2048, y_bottom, y_top), 
-                         x_start + i + 1, map(center_y2_L2, -2048, 2048, y_bottom, y_top), TFT_GREEN);
-                         
-            tft.drawLine(x_start + i, map(center_y1_L3, -2048, 2048, y_bottom, y_top), 
-                         x_start + i + 1, map(center_y2_L3, -2048, 2048, y_bottom, y_top), TFT_BLUE);
+            float amps1_start = getAmps(buffer_L1[i], off1);
+            float amps1_end   = getAmps(buffer_L1[i+1], off1);
+            
+            float amps2_start = getAmps(buffer_L2[i], off2);
+            float amps2_end   = getAmps(buffer_L2[i+1], off2);
+            
+            float amps3_start = getAmps(buffer_L3[i], off3);
+            float amps3_end   = getAmps(buffer_L3[i+1], off3);
+
+            // Map Amps (-15 to +15) to Y-pixels
+            tft.drawLine(x_start + i, mapFloatToY(amps1_start, -15, 15, y_bottom, y_top), 
+                         x_start + i + 1, mapFloatToY(amps1_end, -15, 15, y_bottom, y_top), TFT_RED);
+            
+            tft.drawLine(x_start + i, mapFloatToY(amps2_start, -15, 15, y_bottom, y_top), 
+                         x_start + i + 1, mapFloatToY(amps2_end, -15, 15, y_bottom, y_top), TFT_GREEN);
+            
+            tft.drawLine(x_start + i, mapFloatToY(amps3_start, -15, 15, y_bottom, y_top), 
+                         x_start + i + 1, mapFloatToY(amps3_end, -15, 15, y_bottom, y_top), TFT_BLUE);
         }
     }
     else if (currentGraphMode == GRAPH_MECH) {

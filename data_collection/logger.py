@@ -37,12 +37,16 @@ from datetime import datetime
 import sys
 import os
 
+# Fix Windows terminal encoding so emojis/special chars don't crash the script
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 # --- CONFIGURATION ---
 BAUD_RATE = 115200
 
 def print_manual():
     print("\n" + "="*50)
-    print(" 🛠️  MOTOR FAULT DATA LOGGER - QUICK START GUIDE")
+    print("  MOTOR FAULT DATA LOGGER - QUICK START GUIDE")
     print("="*50)
     print("1. Ensure PlatformIO / Arduino Serial Monitor is CLOSED.")
     print("2. Select your COM Port.")
@@ -58,7 +62,7 @@ def print_manual():
 def get_available_ports():
     ports = serial.tools.list_ports.comports()
     if not ports:
-        print("⚠️  No COM ports found! Is the ESP32 plugged in?")
+        print("[!] No COM ports found! Is the ESP32 plugged in?")
         return []
     
     print("--- Available COM Ports ---")
@@ -111,7 +115,7 @@ def main():
     ]
 
     try:
-        # 1. THE HARDWARE FIX: Connect to ESP32 WITHOUT resetting it
+        # Connect to ESP32 WITHOUT resetting it
         ser = serial.Serial()
         ser.port = com_port
         ser.baudrate = BAUD_RATE
@@ -123,12 +127,9 @@ def main():
         ser.open()
 
         print(f"\n[+] Connected to {com_port} (Hardware reset bypassed!)")
-        
-        # FIX: Changed filename to filepath so it prints the full location
         print(f"[+] Recording data to: {filepath}")
         print("[!] >> PRESS CTRL+C TO STOP RECORDING AND SAVE <<\n")
         
-        # FIX: Changed filename to filepath so it actually saves to the Desktop folder
         with open(filepath, mode='w', newline='') as file:
             writer = csv.writer(file)
             writer.writerow(headers) 
@@ -136,9 +137,7 @@ def main():
             # 5. Listen to the Serial Port continuously
             while True:
                 if ser.in_waiting > 0:
-                    # 2. THE SOFTWARE SHIELD: Catch any weird parsing errors instantly
                     try:
-                        # Use ascii instead of utf-8, it's stricter and ignores garbage better
                         raw_bytes = ser.readline()
                         line = raw_bytes.decode('ascii', errors='ignore').strip()
                         
@@ -150,11 +149,10 @@ def main():
                                 writer.writerow(sensor_data)
                                 print(f"Logged: {sensor_data}")
                             else:
-                                print(f"Skipping malformed data length: {line}")
+                                print(f"Skipping: {line}")
                     
                     except Exception as loop_err:
-                        # If a line is completely cursed, ignore it and keep the script alive
-                        print(f"Ignored a cursed byte sequence: {loop_err}")
+                        print(f"Skipped bad line: {loop_err}")
 
     except serial.SerialException as e:
         print(f"\n[-] ERROR: Could not open {com_port}.")
@@ -162,10 +160,8 @@ def main():
         input("\nPress Enter to exit...") 
     except KeyboardInterrupt:
         print("\n\n[+] Data collection stopped by user.")
-        
-        # FIX: Changed filename to filepath here too
         print(f"[+] File saved successfully: {filepath}")
-        print("[+] Great job! You can now turn off the motor.\n")
+        print("[+] You can now turn off the motor.\n")
     except Exception as e:
         print(f"\n[-] AN UNEXPECTED FATAL ERROR OCCURRED: {e}")
         input("\nPress Enter to exit...")
